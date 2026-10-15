@@ -77,6 +77,289 @@ jobs:
           print("Patched button text colors in", main)
           PY
 
+      - name: Fix subscription import and add TCP ping sorting
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          main = Path("stage/app/src/main/java/app/happx/MainActivity.kt")
+          code = main.read_text()
+
+          def require_replace(old, new, label):
+              global code
+              if old not in code:
+                  raise SystemExit("Could not patch " + label + ": source pattern not found")
+              code = code.replace(old, new, 1)
+
+          require_replace(
+              "import android.os.Bundle\n",
+              "import android.os.Bundle\nimport android.os.SystemClock\nimport android.util.Base64\nimport org.json.JSONObject\nimport java.net.InetSocketAddress\nimport java.net.Socket\nimport java.net.URI\nimport java.net.URL\nimport java.net.HttpURLConnection\nimport java.util.concurrent.CountDownLatch\nimport java.util.concurrent.Executors\nimport kotlin.concurrent.thread\n",
+              "imports"
+          )
+          require_replace(
+              "    private var connected = false\n",
+              "    private var connected = false\n    private val pingMs = mutableMapOf<String, Long>()\n    private var sortingByPing = false\n    private lateinit var sortButton: Button\n",
+              "ping state"
+          )
+
+          old_tools = '''        serverList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+          content.addView(serverList)'''
+          new_tools = '''        val serverTools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+          val pingButton = Button(this).apply {
+              text = "Проверить пинг"
+              isAllCaps = false
+              setTextColor(text)
+              setBackgroundTintList(android.content.res.ColorStateList.valueOf(panel))
+              setOnClickListener { checkPings() }
+          }
+          sortButton = Button(this).apply {
+              text = "Без сортировки"
+              isAllCaps = false
+              setTextColor(text)
+              setBackgroundTintList(android.content.res.ColorStateList.valueOf(panel))
+              setOnClickListener {
+                  sortingByPing = !sortingByPing
+                  refreshServers()
+              }
+          }
+          serverTools.addView(pingButton, LinearLayout.LayoutParams(0, dp(48), 1f))
+          serverTools.addView(Space(this), LinearLayout.LayoutParams(dp(8), 1))
+          serverTools.addView(sortButton, LinearLayout.LayoutParams(0, dp(48), 1f))
+          content.addView(serverTools, marginParams(bottom = 8))
+          serverList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+          content.addView(serverList)'''
+          require_replace(old_tools, new_tools, "ping and sort controls")
+
+          start = code.index("    private fun showImportDialog() {")
+          end = code.index("    private fun refreshServers() {", start)
+          import_method = r'''    private fun showImportDialog() {
+          val box = LinearLayout(this).apply {
+              orientation = LinearLayout.VERTICAL
+              setPadding(dp(20), dp(8), dp(20), 0)
+          }
+          val nameInput = EditText(this).apply {
+              hint = "Название сервера или подписки"
+              setSingleLine(true)
+          }
+          val urlInput = EditText(this).apply {
+              hint = "VLESS/VMess/Trojan или HTTPS-ссылка подписки"
+              setSingleLine(true)
+              inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                  android.text.InputType.TYPE_TEXT_VARIATION_URI
+          }
+          box.addView(nameInput)
+          box.addView(urlInput)
+          AlertDialogBuilder(this)
+              .setTitle("Добавить сервер или подписку")
+              .setView(box)
+              .setNegativeButton("Отмена", null)
+              .setPositiveButton("Импортировать") { _, _ ->
+                  val link = urlInput.text.toString().trim()
+                  val customName = nameInput.text.toString().trim()
+                  if (link.isBlank()) {
+                      Toast.makeText(this, "Вставь ссылку.", Toast.LENGTH_SHORT).show()
+                  } else {
+                      val isShareLink = link.startsWith("vless://", true) ||
+                          link.startsWith("vmess://", true) || link.startsWith("trojan://", true)
+                      val isSubscription = link.startsWith("https://", true) ||
+                          link.startsWith("http://", true)
+                      if (!isShareLink && !isSubscription) {
+                          Toast.makeText(this, "Поддерживаются VLESS, VMess, Trojan и HTTP(S)-подписки.", Toast.LENGTH_LONG).show()
+                      } else if (isShareLink) {
+                          try {
+                              val parsed = SingBoxConfigBuilder.parseShareLink(link)
+                              val name = customName.ifBlank { parsed.name.ifBlank { "Сервер \${servers.size + 1}" } }
+                              val entry = "$name|$link"
+                              if (entry !in servers) servers.add(entry)
+                              serverConfigs[entry] = parsed.configJson
+                              selectedIndex = servers.indexOf(entry)
+                              persistServers()
+                              refreshServers()
+                              Toast.makeText(this, "Профиль \${parsed.type} импортирован.", Toast.LENGTH_LONG).show()
+                          } catch (e: Exception) {
+                              Toast.makeText(this, e.message ?: "Не удалось разобрать ссылку.", Toast.LENGTH_LONG).show()
+                          }
+                      } else {
+                          Toast.makeText(this, "Загружаю подписку…", Toast.LENGTH_SHORT).show()
+                          thread(name = "happx-subscription-import") {
+                              try {
+                                  val connection = (URL(link).openConnection() as HttpURLConnection).apply {
+                                      connectTimeout = 12000
+                                      readTimeout = 18000
+                                      instanceFollowRedirects = true
+                                      setRequestProperty("User-Agent", "HappX-Android")
+                                  }
+                                  val body = try {
+                                      val response = connection.responseCode
+                                      if (response !in 200..299) throw IllegalStateException("Сервер подписки ответил HTTP $response")
+                                      connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                                  } finally {
+                                      connection.disconnect()
+                                  }
+                                  val links = extractShareLinks(body)
+                                  if (links.isEmpty()) throw IllegalStateException("В ответе нет ссылок VLESS/VMess/Trojan. Проверь ссылку подписки.")
+                                  val parsedProfiles = links.mapNotNull { item ->
+                                      runCatching { item to SingBoxConfigBuilder.parseShareLink(item) }.getOrNull()
+                                  }
+                                  if (parsedProfiles.isEmpty()) throw IllegalStateException("Ссылки найдены, но ни одна не распознана. Проверь формат подписки.")
+                                  runOnUiThread {
+                                      var added = 0
+                                      parsedProfiles.forEachIndexed { i, pair ->
+                                          val item = pair.first
+                                          val profile = pair.second
+                                          val label = when {
+                                              customName.isBlank() -> profile.name.ifBlank { "Сервер \${servers.size + i + 1}" }
+                                              parsedProfiles.size == 1 -> customName
+                                              else -> "$customName \${i + 1}"
+                                          }
+                                          val entry = "$label|$item"
+                                          if (entry !in servers) {
+                                              servers.add(entry)
+                                              added++
+                                          }
+                                          serverConfigs[entry] = profile.configJson
+                                          pingMs.remove(entry)
+                                      }
+                                      val lastEntry = parsedProfiles.last().let { pair ->
+                                          val profile = pair.second
+                                          val label = when {
+                                              customName.isBlank() -> profile.name.ifBlank { "Сервер \${servers.size}" }
+                                              parsedProfiles.size == 1 -> customName
+                                              else -> "$customName \${parsedProfiles.size}"
+                                          }
+                                          "$label|\${pair.first}"
+                                      }
+                                      selectedIndex = servers.indexOf(lastEntry).takeIf { it >= 0 } ?: servers.lastIndex
+                                      persistServers()
+                                      refreshServers()
+                                      Toast.makeText(this, "Импортировано серверов: $added из \${parsedProfiles.size}.", Toast.LENGTH_LONG).show()
+                                  }
+                              } catch (e: Exception) {
+                                  runOnUiThread {
+                                      Toast.makeText(this, e.message ?: "Не удалось загрузить подписку.", Toast.LENGTH_LONG).show()
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }.show()
+      }
+
+      private fun extractShareLinks(rawBody: String): List<String> {
+          fun supportedLines(value: String): List<String> = value
+              .removePrefix("\uFEFF")
+              .lineSequence()
+              .map { it.trim().trim('"', '\'') }
+              .filter { line ->
+                  line.startsWith("vless://", true) ||
+                      line.startsWith("vmess://", true) ||
+                      line.startsWith("trojan://", true)
+              }
+              .distinct()
+              .toList()
+
+          val direct = supportedLines(rawBody)
+          if (direct.isNotEmpty()) return direct
+          val compact = rawBody.trim().filterNot { it.isWhitespace() }
+          val decoded = runCatching {
+              String(Base64.decode(compact, Base64.DEFAULT or Base64.URL_SAFE), Charsets.UTF_8)
+          }.getOrNull() ?: return emptyList()
+          return supportedLines(decoded)
+      }
+
+      private fun checkPings() {
+          val targets = servers.toList()
+          if (targets.isEmpty()) {
+              Toast.makeText(this, "Сначала импортируй серверы или подписку.", Toast.LENGTH_SHORT).show()
+              return
+          }
+          Toast.makeText(this, "Проверяю TCP-задержку серверов…", Toast.LENGTH_SHORT).show()
+          val pool = Executors.newFixedThreadPool(6)
+          val latch = CountDownLatch(targets.size)
+          val results = java.util.Collections.synchronizedMap(mutableMapOf<String, Long>())
+          targets.forEach { entry ->
+              pool.execute {
+                  try {
+                      val endpoint = endpointFor(entry.substringAfter("|", ""))
+                      results[entry] = if (endpoint == null) -1L else tcpLatency(endpoint.first, endpoint.second)
+                  } catch (_: Exception) {
+                      results[entry] = -1L
+                  } finally {
+                      latch.countDown()
+                  }
+              }
+          }
+          thread(name = "happx-ping-results") {
+              latch.await()
+              pool.shutdown()
+              runOnUiThread {
+                  pingMs.putAll(results)
+                  sortingByPing = true
+                  refreshServers()
+                  val reachable = results.values.count { it >= 0 }
+                  Toast.makeText(this, "Проверка завершена: $reachable из \${targets.size} серверов доступны по TCP.", Toast.LENGTH_LONG).show()
+              }
+          }
+      }
+
+      private fun endpointFor(link: String): Pair<String, Int>? {
+          if (link.startsWith("vmess://", true)) {
+              val encoded = link.substringAfter("://").substringBefore("#").trim()
+              val jsonText = runCatching {
+                  String(Base64.decode(encoded, Base64.DEFAULT or Base64.URL_SAFE), Charsets.UTF_8)
+              }.getOrNull() ?: return null
+              val json = JSONObject(jsonText)
+              val host = json.optString("add").trim()
+              val port = json.optString("port").toIntOrNull() ?: json.optInt("port", -1)
+              return if (host.isNotBlank() && port in 1..65535) host to port else null
+          }
+          val uri = runCatching { URI(link) }.getOrNull() ?: return null
+          val host = uri.host?.takeIf { it.isNotBlank() } ?: return null
+          val port = uri.port
+          return if (port in 1..65535) host to port else null
+      }
+
+      private fun tcpLatency(host: String, port: Int): Long {
+          Socket().use { socket ->
+              val started = SystemClock.elapsedRealtime()
+              socket.connect(InetSocketAddress(host, port), 1800)
+              return (SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
+          }
+      }
+
+'''
+          code = code[:start] + import_method + code[end:]
+
+          require_replace(
+              "        serverList.removeAllViews()\n",
+              "        serverList.removeAllViews()\n        if (::sortButton.isInitialized) sortButton.text = if (sortingByPing) \"Сортировка: пинг\" else \"Без сортировки\"\n",
+              "sort label"
+          )
+          require_replace(
+              "        servers.forEachIndexed { index, entry ->\n",
+              "        val displayServers = if (sortingByPing) servers.sortedWith(compareBy<String> { pingMs[it] ?: Long.MAX_VALUE }.thenBy { it.substringBefore(\"|\") }) else servers.toList()\n        displayServers.forEach { entry ->\n            val index = servers.indexOf(entry)\n",
+              "display sort"
+          )
+          require_replace(
+              "            info.addView(label(name, 15, text, true))\n",
+              "            info.addView(label(name, 15, text, true))\n            val latency = pingMs[entry]\n            info.addView(label(if (latency == null) \"TCP: не проверен\" else if (latency >= 0) \"TCP: \${latency} ms\" else \"TCP: нет ответа\", 11, muted, false).apply { setPadding(0, dp(3), 0, 0) })\n",
+              "latency label"
+          )
+
+          main.write_text(code)
+
+          manifest = Path("stage/app/src/main/AndroidManifest.xml")
+          if manifest.exists():
+              xml = manifest.read_text()
+              if "android.permission.INTERNET" not in xml:
+                  xml = re.sub(r"(<manifest\b[^>]*>)", r"\1\n    <uses-permission android:name=\"android.permission.INTERNET\" />", xml, count=1)
+                  manifest.write_text(xml)
+          else:
+              raise SystemExit("AndroidManifest.xml not found; cannot enable subscription networking")
+          print("Patched subscription downloading, VLESS/VMess/Trojan extraction, TCP latency checks, ping sorting, and INTERNET permission.")
+          PY
+
       - name: Set up Gradle (project archive has no gradlew wrapper)
         uses: gradle/actions/setup-gradle@v4
         with:

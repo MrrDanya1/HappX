@@ -64,12 +64,10 @@ jobs:
           p.write_text(s)
           print("Updated compile targets and BuildConfig in", p)
           print("\n".join(s.splitlines()[:100]))
-          for source, ranges in [(Path("stage/app/src/main/java/app/happx/HappXApplication.kt"), [(18, 30)]), (Path("stage/app/src/main/java/app/happx/MainActivity.kt"), [(100, 120)])]:
-              lines = source.read_text().splitlines()
-              print(f"--- {source} ---")
-              for start, end in ranges:
-                  for i in range(start, min(end, len(lines)) + 1):
-                      print(f"{i}: {lines[i-1]}")
+          for source in [Path("stage/app/src/main/java/app/happx/HappXApplication.kt"), Path("stage/app/src/main/java/app/happx/MainActivity.kt"), Path("stage/app/build.gradle.kts")]:
+              if source.exists():
+                  print(f"--- FULL SOURCE {source} ---")
+                  print(source.read_text())
           # Inside Button.apply, unqualified `text` resolves to the button label,
           # not the outer color value. Use a concrete Android text color.
           main = Path("stage/app/src/main/java/app/happx/MainActivity.kt")

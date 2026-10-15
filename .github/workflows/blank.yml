@@ -357,15 +357,39 @@ jobs:
           print("Patched subscription downloading, VLESS/VMess/Trojan extraction, TCP latency checks, ping sorting, and INTERNET permission.")
           PY
 
+      - name: Configure ARM64-only APK
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("stage/app/build.gradle.kts")
+          s = p.read_text()
+          if "isUniversalApk = false" not in s:
+              block = '''
+              splits {
+                  abi {
+                      isEnable = true
+                      reset()
+                      include("arm64-v8a")
+                      isUniversalApk = false
+                  }
+              }
+          '''
+              s, n = re.subn(r'(android\s*\{)', lambda m: m.group(1) + block, s, count=1)
+              if n != 1:
+                  raise SystemExit("Could not configure Android ABI split")
+              p.write_text(s)
+          print("Configured ARM64-only APK")
+          PY
+
       - name: Set up Gradle (project archive has no gradlew wrapper)
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      - name: Build optimized universal release APK
+      - name: Build smaller ARM64 APKs
         run: |
           test -f stage/settings.gradle.kts || test -f stage/settings.gradle
-          # No ABI filters/splits: keep all native ABIs supplied by the engine.
           gradle -p stage --no-daemon assembleDebug assembleRelease
 
       - name: Report APK size
@@ -383,20 +407,20 @@ jobs:
               print(f"Target: 100 MiB — {'PASS' if size <= limit else 'OVER TARGET'}")
           PY
 
-      - name: Upload optimized universal release APK
+      - name: Upload installable arm64 debug APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: HappX-universal-release-APK
-          path: stage/**/build/outputs/apk/release/*.apk
+          name: HappX-debug-arm64-APK
+          path: stage/**/build/outputs/apk/debug/*arm64-v8a*.apk
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload installable debug APK
+      - name: Upload arm64 release APK (unsigned)
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: HappX-debug-APK
-          path: stage/**/build/outputs/apk/debug/*.apk
+          name: HappX-release-arm64-unsigned
+          path: stage/**/build/outputs/apk/release/*arm64-v8a*.apk
           if-no-files-found: error
           retention-days: 7

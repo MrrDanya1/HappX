@@ -104,7 +104,7 @@ jobs:
           )
 
           old_tools = '''        serverList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-          content.addView(serverList)'''
+        content.addView(serverList)'''
           new_tools = '''        val serverTools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
           val pingButton = Button(this).apply {
               text = "Проверить пинг"

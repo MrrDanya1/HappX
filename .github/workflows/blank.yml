@@ -64,10 +64,7 @@ jobs:
           p.write_text(s)
           print("Updated compile targets and BuildConfig in", p)
           print("\n".join(s.splitlines()[:100]))
-          for source in [Path("stage/app/src/main/java/app/happx/HappXApplication.kt"), Path("stage/app/src/main/java/app/happx/MainActivity.kt"), Path("stage/app/build.gradle.kts")]:
-              if source.exists():
-                  print(f"--- FULL SOURCE {source} ---")
-                  print(source.read_text())
+          print("Patched Java/Kotlin targets and button colors.")
           # Inside Button.apply, unqualified `text` resolves to the button label,
           # not the outer color value. Use a concrete Android text color.
           main = Path("stage/app/src/main/java/app/happx/MainActivity.kt")
@@ -369,15 +366,15 @@ jobs:
         run: |
           test -f stage/settings.gradle.kts || test -f stage/settings.gradle
           # No ABI filters/splits: keep all native ABIs supplied by the engine.
-          gradle -p stage --no-daemon assembleRelease
+          gradle -p stage --no-daemon assembleDebug assembleRelease
 
       - name: Report APK size
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          files = list(Path("stage").glob("**/build/outputs/apk/release/*.apk"))
+          files = [p for p in Path("stage").glob("**/build/outputs/apk/**/*.apk") if "debug" in p.parts or "release" in p.parts]
           if not files:
-              raise SystemExit("Release APK was not produced")
+              raise SystemExit("No APKs were produced")
           limit = 100 * 1024 * 1024
           for apk in files:
               size = apk.stat().st_size
@@ -392,5 +389,14 @@ jobs:
         with:
           name: HappX-universal-release-APK
           path: stage/**/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload installable debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HappX-debug-APK
+          path: stage/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7

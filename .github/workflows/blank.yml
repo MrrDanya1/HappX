@@ -169,14 +169,14 @@ jobs:
                       } else if (isShareLink) {
                           try {
                               val parsed = SingBoxConfigBuilder.parseShareLink(link)
-                              val name = customName.ifBlank { parsed.name.ifBlank { "Сервер \${servers.size + 1}" } }
+                              val name = customName.ifBlank { parsed.name.ifBlank { "Сервер ${servers.size + 1}" } }
                               val entry = "$name|$link"
                               if (entry !in servers) servers.add(entry)
                               serverConfigs[entry] = parsed.configJson
                               selectedIndex = servers.indexOf(entry)
                               persistServers()
                               refreshServers()
-                              Toast.makeText(this, "Профиль \${parsed.type} импортирован.", Toast.LENGTH_LONG).show()
+                              Toast.makeText(this, "Профиль ${parsed.type} импортирован.", Toast.LENGTH_LONG).show()
                           } catch (e: Exception) {
                               Toast.makeText(this, e.message ?: "Не удалось разобрать ссылку.", Toast.LENGTH_LONG).show()
                           }
@@ -209,9 +209,9 @@ jobs:
                                           val item = pair.first
                                           val profile = pair.second
                                           val label = when {
-                                              customName.isBlank() -> profile.name.ifBlank { "Сервер \${servers.size + i + 1}" }
+                                              customName.isBlank() -> profile.name.ifBlank { "Сервер ${servers.size + i + 1}" }
                                               parsedProfiles.size == 1 -> customName
-                                              else -> "$customName \${i + 1}"
+                                              else -> "$customName ${i + 1}"
                                           }
                                           val entry = "$label|$item"
                                           if (entry !in servers) {
@@ -224,16 +224,16 @@ jobs:
                                       val lastEntry = parsedProfiles.last().let { pair ->
                                           val profile = pair.second
                                           val label = when {
-                                              customName.isBlank() -> profile.name.ifBlank { "Сервер \${servers.size}" }
+                                              customName.isBlank() -> profile.name.ifBlank { "Сервер ${servers.size}" }
                                               parsedProfiles.size == 1 -> customName
-                                              else -> "$customName \${parsedProfiles.size}"
+                                              else -> "$customName ${parsedProfiles.size}"
                                           }
-                                          "$label|\${pair.first}"
+                                          "$label|${pair.first}"
                                       }
                                       selectedIndex = servers.indexOf(lastEntry).takeIf { it >= 0 } ?: servers.lastIndex
                                       persistServers()
                                       refreshServers()
-                                      Toast.makeText(this, "Импортировано серверов: $added из \${parsedProfiles.size}.", Toast.LENGTH_LONG).show()
+                                      Toast.makeText(this, "Импортировано серверов: $added из ${parsedProfiles.size}.", Toast.LENGTH_LONG).show()
                                   }
                               } catch (e: Exception) {
                                   runOnUiThread {
@@ -298,7 +298,7 @@ jobs:
                   sortingByPing = true
                   refreshServers()
                   val reachable = results.values.count { it >= 0 }
-                  Toast.makeText(this, "Проверка завершена: $reachable из \${targets.size} серверов доступны по TCP.", Toast.LENGTH_LONG).show()
+                  Toast.makeText(this, "Проверка завершена: $reachable из ${targets.size} серверов доступны по TCP.", Toast.LENGTH_LONG).show()
               }
           }
       }
@@ -343,7 +343,7 @@ jobs:
           )
           require_replace(
               "            info.addView(label(name, 15, text, true))\n",
-              "            info.addView(label(name, 15, text, true))\n            val latency = pingMs[entry]\n            info.addView(label(if (latency == null) \"TCP: не проверен\" else if (latency >= 0) \"TCP: \${latency} ms\" else \"TCP: нет ответа\", 11, muted, false).apply { setPadding(0, dp(3), 0, 0) })\n",
+              "            info.addView(label(name, 15, text, true))\n            val latency = pingMs[entry]\n            info.addView(label(if (latency == null) \"TCP: не проверен\" else if (latency >= 0) \"TCP: ${latency} ms\" else \"TCP: нет ответа\", 11, muted, false).apply { setPadding(0, dp(3), 0, 0) })\n",
               "latency label"
           )
 

@@ -244,9 +244,9 @@ jobs:
                       }
                   }
               }.show()
-      }
+          }
 
-      private fun extractShareLinks(rawBody: String): List<String> {
+          private fun extractShareLinks(rawBody: String): List<String> {
           fun supportedLines(value: String): List<String> = value
               .removePrefix("\uFEFF")
               .lineSequence()
@@ -266,9 +266,9 @@ jobs:
               String(Base64.decode(compact, Base64.DEFAULT or Base64.URL_SAFE), Charsets.UTF_8)
           }.getOrNull() ?: return emptyList()
           return supportedLines(decoded)
-      }
+          }
 
-      private fun checkPings() {
+          private fun checkPings() {
           val targets = servers.toList()
           if (targets.isEmpty()) {
               Toast.makeText(this, "Сначала импортируй серверы или подписку.", Toast.LENGTH_SHORT).show()
@@ -301,9 +301,9 @@ jobs:
                   Toast.makeText(this, "Проверка завершена: $reachable из ${targets.size} серверов доступны по TCP.", Toast.LENGTH_LONG).show()
               }
           }
-      }
+          }
 
-      private fun endpointFor(link: String): Pair<String, Int>? {
+          private fun endpointFor(link: String): Pair<String, Int>? {
           if (link.startsWith("vmess://", true)) {
               val encoded = link.substringAfter("://").substringBefore("#").trim()
               val jsonText = runCatching {
@@ -318,17 +318,17 @@ jobs:
           val host = uri.host?.takeIf { it.isNotBlank() } ?: return null
           val port = uri.port
           return if (port in 1..65535) host to port else null
-      }
+          }
 
-      private fun tcpLatency(host: String, port: Int): Long {
+          private fun tcpLatency(host: String, port: Int): Long {
           Socket().use { socket ->
               val started = SystemClock.elapsedRealtime()
               socket.connect(InetSocketAddress(host, port), 1800)
               return (SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
           }
-      }
+          }
 
-'''
+          '''
           code = code[:start] + import_method + code[end:]
 
           require_replace(

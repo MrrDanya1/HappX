@@ -34,14 +34,33 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
           p = Path("stage/app/build.gradle.kts")
           if not p.exists():
               raise SystemExit("Missing stage/app/build.gradle.kts")
           s = p.read_text()
+          # Normalize common Java 8 target spellings.
+          s = s.replace("JavaVersion.VERSION_1_8", "JavaVersion.VERSION_17")
           s = s.replace("VERSION_1_8", "VERSION_17")
-          s = s.replace('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
+          s = re.sub(r'(["\'])1\.8(["\'])', r'\g<1>17\g<2>', s)
+          # Explicitly set Android's Java bytecode target to 17.
+          if "compileOptions" in s:
+              s = re.sub(
+                  r'compileOptions\s*\{.*?\}',
+                  'compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }',
+                  s, count=1, flags=re.S
+              )
+          elif re.search(r'android\s*\{', s):
+              s = re.sub(
+                  r'android\s*\{',
+                  'android {\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }',
+                  s, count=1
+              )
+          else:
+              raise SystemExit("Could not find android { block in app/build.gradle.kts")
           p.write_text(s)
-          print("Aligned Java compile target to 17 in", p)
+          print("Updated compile targets in", p)
+          print("\n".join(s.splitlines()[:100]))
           PY
 
       - name: Set up Gradle (project archive has no gradlew wrapper)

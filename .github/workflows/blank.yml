@@ -70,6 +70,13 @@ jobs:
               for start, end in ranges:
                   for i in range(start, min(end, len(lines)) + 1):
                       print(f"{i}: {lines[i-1]}")
+          # Inside Button.apply, unqualified `text` resolves to the button label,
+          # not the outer color value. Use a concrete Android text color.
+          main = Path("stage/app/src/main/java/app/happx/MainActivity.kt")
+          code = main.read_text()
+          code = code.replace("setTextColor(text)", "setTextColor(android.graphics.Color.WHITE)")
+          main.write_text(code)
+          print("Patched button text colors in", main)
           PY
 
       - name: Set up Gradle (project archive has no gradlew wrapper)

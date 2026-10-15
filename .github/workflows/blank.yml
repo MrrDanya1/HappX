@@ -109,14 +109,14 @@ jobs:
           val pingButton = Button(this).apply {
               text = "Проверить пинг"
               isAllCaps = false
-              setTextColor(text)
+              setTextColor(Color.WHITE)
               setBackgroundTintList(android.content.res.ColorStateList.valueOf(panel))
               setOnClickListener { checkPings() }
           }
           sortButton = Button(this).apply {
               text = "Без сортировки"
               isAllCaps = false
-              setTextColor(text)
+              setTextColor(Color.WHITE)
               setBackgroundTintList(android.content.res.ColorStateList.valueOf(panel))
               setOnClickListener {
                   sortingByPing = !sortingByPing

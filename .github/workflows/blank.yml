@@ -30,6 +30,20 @@ jobs:
           mkdir -p stage
           unzip -o HappX-Android-engine-stage.zip -d stage
 
+      - name: Align Java and Kotlin targets
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("stage/app/build.gradle.kts")
+          if not p.exists():
+              raise SystemExit("Missing stage/app/build.gradle.kts")
+          s = p.read_text()
+          s = s.replace("VERSION_1_8", "VERSION_17")
+          s = s.replace('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
+          p.write_text(s)
+          print("Aligned Java compile target to 17 in", p)
+          PY
+
       - name: Set up Gradle (project archive has no gradlew wrapper)
         uses: gradle/actions/setup-gradle@v4
         with:

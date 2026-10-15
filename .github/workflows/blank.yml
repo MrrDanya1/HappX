@@ -58,9 +58,18 @@ jobs:
               )
           else:
               raise SystemExit("Could not find android { block in app/build.gradle.kts")
+          # Enable BuildConfig generation on Android Gradle Plugin 8+.
+          if not re.search(r'buildConfig\\s*=\\s*true', s):
+              s = re.sub(r'android\\s*\\{', 'android {\\n    buildFeatures { buildConfig = true }', s, count=1)
           p.write_text(s)
-          print("Updated compile targets in", p)
+          print("Updated compile targets and BuildConfig in", p)
           print("\n".join(s.splitlines()[:100]))
+          for source, ranges in [(Path("stage/app/src/main/java/app/happx/HappXApplication.kt"), [(18, 30)]), (Path("stage/app/src/main/java/app/happx/MainActivity.kt"), [(100, 120)])]:
+              lines = source.read_text().splitlines()
+              print(f"--- {source} ---")
+              for start, end in ranges:
+                  for i in range(start, min(end, len(lines)) + 1):
+                      print(f"{i}: {lines[i-1]}")
           PY
 
       - name: Set up Gradle (project archive has no gradlew wrapper)

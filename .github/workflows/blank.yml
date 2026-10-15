@@ -30,6 +30,15 @@ jobs:
           mkdir -p stage
           unzip -o HappX-Android-engine-stage.zip -d stage
 
+      - name: Inspect Android VPN source
+        run: |
+          echo "===== MainActivity.kt ====="
+          sed -n '1,520p' stage/app/src/main/java/app/happx/MainActivity.kt
+          echo "===== AndroidManifest.xml ====="
+          cat stage/app/src/main/AndroidManifest.xml
+          echo "===== build.gradle.kts ====="
+          cat stage/app/build.gradle.kts
+
       - name: Align Java and Kotlin targets
         run: |
           python3 - <<'PY'

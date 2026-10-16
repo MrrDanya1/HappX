@@ -437,8 +437,16 @@ jobs:
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
           APKSIGNER="$(find "$SDK/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -n "$APKSIGNER"
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner not found under Android SDK: $SDK"
+            find "$SDK" -maxdepth 4 -type f -name apksigner -print || true
+            exit 1
+          fi
           KEY="$HOME/.android/debug.keystore"
-          test -f "$KEY"
+          mkdir -p "$(dirname "$KEY")"
+          if [ ! -f "$KEY" ]; then
+            keytool -genkeypair -v -keystore "$KEY" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
           "$APKSIGNER" sign --ks "$KEY" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey "$APK"
           "$APKSIGNER" verify --verbose "$APK"
           mv "$APK" stage/app/build/outputs/apk/release/HappX-arm64-release.apk

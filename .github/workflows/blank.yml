@@ -429,11 +429,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload arm64 release APK (unsigned)
+      - name: Sign release APK for direct installation
+        run: |
+          set -euo pipefail
+          APK="stage/app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk"
+          test -f "$APK"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          APKSIGNER="$(find "$SDK/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          KEY="$HOME/.android/debug.keystore"
+          test -f "$KEY"
+          "$APKSIGNER" sign --ks "$KEY" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey "$APK"
+          "$APKSIGNER" verify --verbose "$APK"
+          mv "$APK" stage/app/build/outputs/apk/release/HappX-arm64-release.apk
+
+      - name: Upload arm64 release APK (signed for testing)
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: HappX-release-arm64-unsigned
-          path: stage/**/build/outputs/apk/release/*arm64-v8a*.apk
+          name: HappX-release-arm64-signed
+          path: stage/app/build/outputs/apk/release/HappX-arm64-release.apk
           if-no-files-found: error
           retention-days: 7

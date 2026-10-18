@@ -933,6 +933,19 @@ jobs:
               print(f"APK archive entries: {len(names)}")
               native = [n for n in names if n.startswith("lib/") and n.endswith(".so")]
               print("Native libraries:", ", ".join(native) if native else "(none listed)")
+              for name in native:
+                  digest = hashlib.sha256(z.read(name)).hexdigest()
+                  print(f"SHA256 {name}: {digest}")
+              target = "lib/arm64-v8a/libgojni.so"
+              if target in names:
+                  data = z.read(target)
+                  digest = hashlib.sha256(data).hexdigest()
+                  Path(os.environ["RUNNER_TEMP"], "happx-libgojni-sha256.txt").write_text(
+                      f"{digest}  {target}\\n", encoding="utf-8"
+                  )
+                  print(f"libgojni.so final-APK SHA-256: {digest}")
+              else:
+                  print("NOTICE: lib/arm64-v8a/libgojni.so is not present in the final APK.")
           manifest_candidates = [
               p for p in Path("stage/app/build/intermediates").rglob("AndroidManifest.xml")
               if "release" in p.parts and "merged_manifest" in p.parts

@@ -1,4 +1,4 @@
-name: HappX Android APK # diagnostic retrigger
+name: HappX Android APK
 
 on:
   push:
@@ -647,92 +647,92 @@ jobs:
           start = code.index("    private fun requestConnection() {")
           end = code.index("    @Deprecated(\"Legacy callback kept for broad Android compatibility\")", start)
           replacement = r'''    private fun requestConnection() {
-          if (connected) {
-              startService(Intent(this, HappXVpnService::class.java).setAction(HappXVpnService.ACTION_STOP))
-              connected = false
-              status.text = "Отключение…"
-              connectButton.text = "⏻   ПОДКЛЮЧИТЬ"
-              return
+              if (connected) {
+                  startService(Intent(this, HappXVpnService::class.java).setAction(HappXVpnService.ACTION_STOP))
+                  connected = false
+                  status.text = "Отключение…"
+                  connectButton.text = "⏻   ПОДКЛЮЧИТЬ"
+                  return
+              }
+              if (servers.isEmpty()) {
+                  Toast.makeText(this, "Сначала добавь ссылку сервера или подписку.", Toast.LENGTH_LONG).show()
+                  return
+              }
+              if (selectedIndex !in servers.indices) {
+                  Toast.makeText(this, "Сначала выбери сервер из списка.", Toast.LENGTH_LONG).show()
+                  return
+              }
+              val selected = servers[selectedIndex]
+              val outbound = serverConfigs[selected]
+              if (outbound.isNullOrBlank()) {
+                  Toast.makeText(this, "Не удалось подготовить Xray-конфигурацию. Импортируй VLESS, VMess или Trojan.", Toast.LENGTH_LONG).show()
+                  return
+              }
+              val prepare = VpnService.prepare(this)
+              if (prepare != null) {
+                  startActivityForResult(prepare, 700)
+              } else {
+                  launchXray(outbound)
+              }
           }
-          if (servers.isEmpty()) {
-              Toast.makeText(this, "Сначала добавь ссылку сервера или подписку.", Toast.LENGTH_LONG).show()
-              return
-          }
-          if (selectedIndex !in servers.indices) {
-              Toast.makeText(this, "Сначала выбери сервер из списка.", Toast.LENGTH_LONG).show()
-              return
-          }
-          val selected = servers[selectedIndex]
-          val outbound = serverConfigs[selected]
-          if (outbound.isNullOrBlank()) {
-              Toast.makeText(this, "Не удалось подготовить Xray-конфигурацию. Импортируй VLESS, VMess или Trojan.", Toast.LENGTH_LONG).show()
-              return
-          }
-          val prepare = VpnService.prepare(this)
-          if (prepare != null) {
-              startActivityForResult(prepare, 700)
-          } else {
-              launchXray(outbound)
-          }
-      }
 
-      private fun launchXray(outbound: String) {
-          val intent = Intent(this, HappXVpnService::class.java)
-              .setAction(HappXVpnService.ACTION_START)
-              .putExtra(HappXVpnService.EXTRA_OUTBOUND, outbound)
-          if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
-          status.text = "Запуск Xray…"
-          connectButton.text = "Отключить"
-      }
+          private fun launchXray(outbound: String) {
+              val intent = Intent(this, HappXVpnService::class.java)
+                  .setAction(HappXVpnService.ACTION_START)
+                  .putExtra(HappXVpnService.EXTRA_OUTBOUND, outbound)
+              if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+              status.text = "Запуск Xray…"
+              connectButton.text = "Отключить"
+          }
 
-      private val xrayStateReceiver = object : android.content.BroadcastReceiver() {
-          override fun onReceive(context: android.content.Context?, intent: Intent?) {
-              val state = intent?.getStringExtra(HappXVpnService.EXTRA_STATE) ?: return
-              val message = intent.getStringExtra(HappXVpnService.EXTRA_MESSAGE) ?: state
-              connected = state == "connected"
-              if (::status.isInitialized) status.text = message
+          private val xrayStateReceiver = object : android.content.BroadcastReceiver() {
+              override fun onReceive(context: android.content.Context?, intent: Intent?) {
+                  val state = intent?.getStringExtra(HappXVpnService.EXTRA_STATE) ?: return
+                  val message = intent.getStringExtra(HappXVpnService.EXTRA_MESSAGE) ?: state
+                  connected = state == "connected"
+                  if (::status.isInitialized) status.text = message
+                  if (::connectButton.isInitialized) connectButton.text = if (connected) "Отключить" else "⏻   ПОДКЛЮЧИТЬ"
+              }
+          }
+
+          override fun onResume() {
+              super.onResume()
+              val filter = android.content.IntentFilter(HappXVpnService.ACTION_STATE)
+              if (android.os.Build.VERSION.SDK_INT >= 33) {
+                  registerReceiver(xrayStateReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+              } else {
+                  @Suppress("DEPRECATION")
+                  registerReceiver(xrayStateReceiver, filter)
+              }
+              val saved = getSharedPreferences("happx_vpn", MODE_PRIVATE)
+              connected = saved.getString("state", "disconnected") == "connected"
+              if (::status.isInitialized) status.text = saved.getString("message", "Отключено")
               if (::connectButton.isInitialized) connectButton.text = if (connected) "Отключить" else "⏻   ПОДКЛЮЧИТЬ"
           }
-      }
 
-      override fun onResume() {
-          super.onResume()
-          val filter = android.content.IntentFilter(HappXVpnService.ACTION_STATE)
-          if (android.os.Build.VERSION.SDK_INT >= 33) {
-              registerReceiver(xrayStateReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
-          } else {
-              @Suppress("DEPRECATION")
-              registerReceiver(xrayStateReceiver, filter)
+          override fun onPause() {
+              runCatching { unregisterReceiver(xrayStateReceiver) }
+              super.onPause()
           }
-          val saved = getSharedPreferences("happx_vpn", MODE_PRIVATE)
-          connected = saved.getString("state", "disconnected") == "connected"
-          if (::status.isInitialized) status.text = saved.getString("message", "Отключено")
-          if (::connectButton.isInitialized) connectButton.text = if (connected) "Отключить" else "⏻   ПОДКЛЮЧИТЬ"
-      }
 
-      override fun onPause() {
-          runCatching { unregisterReceiver(xrayStateReceiver) }
-          super.onPause()
-      }
-
-      '''
+          '''
           code = code[:start] + replacement + code[end:]
           # Replace old permission callback with real Xray startup.
           callback_start = code.index("    @Deprecated(\"Legacy callback kept for broad Android compatibility\")")
           callback_end = code.index("    private fun showImportDialog() {", callback_start)
           callback = r'''    @Deprecated("Legacy callback kept for broad Android compatibility")
-      override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-          super.onActivityResult(requestCode, resultCode, data)
-          if (requestCode == 700 && resultCode == RESULT_OK && selectedIndex in servers.indices) {
-              val selected = servers[selectedIndex]
-              val outbound = serverConfigs[selected]
-              if (!outbound.isNullOrBlank()) launchXray(outbound)
-          } else if (requestCode == 700) {
-              Toast.makeText(this, "Разрешение VPN не выдано.", Toast.LENGTH_LONG).show()
+          override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+              super.onActivityResult(requestCode, resultCode, data)
+              if (requestCode == 700 && resultCode == RESULT_OK && selectedIndex in servers.indices) {
+                  val selected = servers[selectedIndex]
+                  val outbound = serverConfigs[selected]
+                  if (!outbound.isNullOrBlank()) launchXray(outbound)
+              } else if (requestCode == 700) {
+                  Toast.makeText(this, "Разрешение VPN не выдано.", Toast.LENGTH_LONG).show()
+              }
           }
-      }
 
-      '''
+          '''
           code = code[:callback_start] + callback + code[callback_end:]
           # Add missing state/receiver imports and remove accidental duplicate registrations.
           if "import android.content.BroadcastReceiver" not in code:

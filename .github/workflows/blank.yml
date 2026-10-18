@@ -881,11 +881,11 @@ jobs:
               assert z.namelist() == ["HappX-0.1.8.apk"]
           PY
 
-      - name: Upload ZIP with APK at root
+      - name: Upload ZIP directly (no extra ZIP wrapper)
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: HappX-APK-ZIP
           path: HappX-0.1.8.zip
+          archive: false
           if-no-files-found: error
           retention-days: 7

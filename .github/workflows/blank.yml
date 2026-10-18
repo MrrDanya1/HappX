@@ -941,7 +941,7 @@ jobs:
                   data = z.read(target)
                   digest = hashlib.sha256(data).hexdigest()
                   Path(os.environ["RUNNER_TEMP"], "happx-libgojni-sha256.txt").write_text(
-                      f"{digest}  {target}\\n", encoding="utf-8"
+                      f"{digest}  {target}\n", encoding="utf-8"
                   )
                   print(f"libgojni.so final-APK SHA-256: {digest}")
               else:

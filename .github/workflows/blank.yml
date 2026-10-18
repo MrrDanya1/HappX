@@ -37,6 +37,8 @@ jobs:
 
       - name: Set up Android SDK for Xray core
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Set up Android NDK for Xray core
         uses: nttld/setup-ndk@v1

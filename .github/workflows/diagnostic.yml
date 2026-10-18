@@ -1,0 +1,18 @@
+name: HappX Actions Diagnostic
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm Actions runner starts
+        run: |
+          echo "GitHub Actions runner started successfully."
+          echo "This is a temporary diagnostic workflow."

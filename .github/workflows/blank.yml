@@ -1025,6 +1025,7 @@ jobs:
           ZIPALIGN="$(find "$SDK/build-tools" -type f -name zipalign | sort -V | tail -n 1)"
           test -n "$AAPT"
           test -n "$ZIPALIGN"
+          test -s "$APK"
           "$ZIPALIGN" -c -v 4 "$APK"
           "$AAPT" dump badging "$APK" | tee "$RUNNER_TEMP/happx-apk-badging.txt"
           grep -q "package: name='app.happx'" "$RUNNER_TEMP/happx-apk-badging.txt"
@@ -1033,7 +1034,12 @@ jobs:
             grep -q "native-code: 'arm64-v8a'" "$RUNNER_TEMP/happx-apk-badging.txt"
           else
             echo "No native-code metadata: expected for the NO-CORE diagnostic APK."
-            if unzip -Z1 "$APK" | grep -qE '^lib/[^/]+/[^/]+\.so          sha256sum "$APK"
+            if unzip -Z1 "$APK" | grep -qE '^lib/[^/]+/[^/]+\.so$'; then
+              echo "::error::Native .so files remain in NO-CORE diagnostic APK."
+              exit 1
+            fi
+          fi
+          sha256sum "$APK"
           {
             echo "### Android install metadata"
             echo "- APK alignment check: passed"

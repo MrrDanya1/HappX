@@ -72,8 +72,13 @@ jobs:
       - name: Build official XTLS libXray Android library
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/XTLS/libXray.git /tmp/libXray
+          git init /tmp/libXray
+          git -C /tmp/libXray remote add origin https://github.com/XTLS/libXray.git
+          git -C /tmp/libXray fetch --depth 1 origin 75ccb623c807a1113a064278e3e544b0049c16a5
+          git -C /tmp/libXray checkout --detach 75ccb623c807a1113a064278e3e544b0049c16a5
+          test "$(git -C /tmp/libXray rev-parse HEAD)" = "75ccb623c807a1113a064278e3e544b0049c16a5"
           cd /tmp/libXray
+          echo "Pinned XTLS/libXray commit: $(git rev-parse HEAD)"
           python3 build/main.py android
           test -s libXray.aar
           mkdir -p "$GITHUB_WORKSPACE/stage/app/libs"
@@ -862,6 +867,76 @@ jobs:
           "$APKSIGNER" sign --ks "$KEY" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey "$APK"
           "$APKSIGNER" verify --verbose "$APK"
           mv "$APK" stage/app/build/outputs/apk/release/HappX-arm64-release.apk
+
+      - name: Audit release APK and merged manifest
+        run: |
+          set -euo pipefail
+          APK="stage/app/build/outputs/apk/release/HappX-arm64-release.apk"
+          test -s "$APK"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          APKSIGNER="$(find "$SDK/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import re
+          import zipfile
+          import xml.etree.ElementTree as ET
+
+          apk = Path("stage/app/build/outputs/apk/release/HappX-arm64-release.apk")
+          with zipfile.ZipFile(apk) as z:
+              bad = z.testzip()
+              if bad:
+                  raise SystemExit(f"APK ZIP integrity check failed at: {bad}")
+              names = z.namelist()
+              print(f"APK archive entries: {len(names)}")
+              native = [n for n in names if n.startswith("lib/") and n.endswith(".so")]
+              print("Native libraries:", ", ".join(native) if native else "(none listed)")
+          manifest_candidates = [
+              p for p in Path("stage/app/build/intermediates").rglob("AndroidManifest.xml")
+              if "release" in p.parts and "merged_manifest" in p.parts
+          ]
+          if not manifest_candidates:
+              print("WARNING: merged release manifest XML not found; see Gradle build outputs.")
+          else:
+              manifest = sorted(manifest_candidates, key=lambda p: len(p.parts))[0]
+              root = ET.parse(manifest).getroot()
+              android = "{http://schemas.android.com/apk/res/android}"
+              permissions = sorted({
+                  el.attrib.get(android + "name", "")
+                  for el in root
+                  if el.tag in ("uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m")
+              } - {""})
+              print("Merged release manifest:", manifest)
+              print("Requested permissions:")
+              for permission in permissions:
+                  print(" -", permission)
+              risky_terms = (
+                  "READ_SMS", "SEND_SMS", "RECEIVE_SMS", "READ_CONTACTS",
+                  "WRITE_CONTACTS", "READ_CALL_LOG", "WRITE_CALL_LOG",
+                  "RECORD_AUDIO", "CAMERA", "READ_PHONE_STATE",
+                  "REQUEST_INSTALL_PACKAGES", "SYSTEM_ALERT_WINDOW",
+                  "BIND_ACCESSIBILITY_SERVICE", "READ_CALENDAR", "WRITE_CALENDAR",
+                  "ACCESS_FINE_LOCATION", "ACCESS_BACKGROUND_LOCATION"
+              )
+              flagged = [p for p in permissions if any(term in p for term in risky_terms)]
+              if flagged:
+                  print("SECURITY REVIEW REQUIRED: permissions unrelated to a basic VPN app:")
+                  for permission in flagged:
+                      print(" -", permission)
+                  with open("${GITHUB_STEP_SUMMARY}", "a", encoding="utf-8") as f:
+                      f.write("### Security review required\nUnexpected/sensitive permissions found in the merged manifest:\n")
+                      f.writelines(f"- `{p}`\n" for p in flagged)
+              else:
+                  print("No permissions from the configured sensitive-permission review list were found.")
+                  with open("${GITHUB_STEP_SUMMARY}", "a", encoding="utf-8") as f:
+                      f.write("### APK security checks\n- APK ZIP integrity: passed\n- APK signature verification: passed\n- No permissions from the configured sensitive-permission review list found in the merged manifest.\n")
+          digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+          print("SHA-256:", digest)
+          with open("${GITHUB_STEP_SUMMARY}", "a", encoding="utf-8") as f:
+              f.write(f"\n- APK SHA-256: `{digest}`\n")
+          PY
 
       - name: Package APK at ZIP root
         run: |

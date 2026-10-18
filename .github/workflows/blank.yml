@@ -1,4 +1,4 @@
-name: HappX Android APK
+name: HappX Android APK # diagnostic retrigger
 
 on:
   push:

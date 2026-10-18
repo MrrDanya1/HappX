@@ -39,12 +39,12 @@ jobs:
           if not p.exists():
               raise SystemExit("Missing stage/app/build.gradle.kts")
           s = p.read_text()
-          s, code_count = re.subn(r'versionCode\s*=\s*\d+', 'versionCode = 9', s, count=1)
-          s, name_count = re.subn(r'versionName\s*=\s*"[^"]+"', 'versionName = "0.1.8"', s, count=1)
+          s, code_count = re.subn(r'versionCode\s*=\s*\d+', 'versionCode = 10', s, count=1)
+          s, name_count = re.subn(r'versionName\s*=\s*"[^"]+"', 'versionName = "0.1.9"', s, count=1)
           if code_count != 1 or name_count != 1:
               raise SystemExit("Could not set versionCode/versionName")
           p.write_text(s)
-          print("HappX version set to 0.1.8 (versionCode 9)")
+          print("HappX version set to 0.1.9 (versionCode 10)")
           PY
 
       - name: Set up Go for Xray core
@@ -846,7 +846,7 @@ jobs:
               print(f"Target: 100 MiB — {'PASS' if size <= limit else 'OVER TARGET'}")
           PY
 
-      - name: Sign release APK with persistent key (or test key)
+      - name: Sign release APK with persistent key
         env:
           HAPPX_KEYSTORE_BASE64: ${{ secrets.HAPPX_KEYSTORE_BASE64 }}
           HAPPX_KEYSTORE_PASSWORD: ${{ secrets.HAPPX_KEYSTORE_PASSWORD }}
@@ -873,15 +873,8 @@ jobs:
             echo "Signing mode: persistent release key" >> "$GITHUB_STEP_SUMMARY"
             echo "HAPPX_SIGNING_MODE=release" >> "$GITHUB_ENV"
           else
-            echo "::warning::Release signing secrets are not configured. This APK will use a temporary Android debug key and is for testing only."
-            KEY="$HOME/.android/debug.keystore"
-            mkdir -p "$(dirname "$KEY")"
-            if [ ! -f "$KEY" ]; then
-              keytool -genkeypair -v -keystore "$KEY" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-            fi
-            "$APKSIGNER" sign --ks "$KEY" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey "$APK"
-            echo "Signing mode: temporary debug key (testing only; not a production release)" >> "$GITHUB_STEP_SUMMARY"
-            echo "HAPPX_SIGNING_MODE=test" >> "$GITHUB_ENV"
+            echo "::error::Release signing secrets are missing. Configure all four HAPPX signing secrets before building a release."
+            exit 1
           fi
 
           "$APKSIGNER" verify --verbose "$APK"
@@ -899,6 +892,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import hashlib
+          import os
           import re
           import zipfile
           import xml.etree.ElementTree as ET
@@ -944,16 +938,16 @@ jobs:
                   print("SECURITY REVIEW REQUIRED: permissions unrelated to a basic VPN app:")
                   for permission in flagged:
                       print(" -", permission)
-                  with open("${GITHUB_STEP_SUMMARY}", "a", encoding="utf-8") as f:
+                  with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
                       f.write("### Security review required\nUnexpected/sensitive permissions found in the merged manifest:\n")
                       f.writelines(f"- `{p}`\n" for p in flagged)
               else:
                   print("No permissions from the configured sensitive-permission review list were found.")
-                  with open("${GITHUB_STEP_SUMMARY}", "a", encoding="utf-8") as f:
+                  with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
                       f.write("### APK security checks\n- APK ZIP integrity: passed\n- APK signature verification: passed\n- No permissions from the configured sensitive-permission review list found in the merged manifest.\n")
           digest = hashlib.sha256(apk.read_bytes()).hexdigest()
           print("SHA-256:", digest)
-          with open("${GITHUB_STEP_SUMMARY}", "a", encoding="utf-8") as f:
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write(f"\n- APK SHA-256: `{digest}`\n")
           PY
 
@@ -966,20 +960,20 @@ jobs:
           from pathlib import Path
           from zipfile import ZipFile, ZIP_DEFLATED
           apk = Path("stage/app/build/outputs/apk/release/HappX-arm64-release.apk")
-          archive = Path("HappX-0.1.8.zip")
+          archive = Path("HappX-0.1.9.zip")
           with ZipFile(archive, "w", ZIP_DEFLATED) as z:
-              z.write(apk, arcname="HappX-0.1.8.apk")
+              z.write(apk, arcname="HappX-0.1.9.apk")
           print(f"Created {archive} ({archive.stat().st_size:,} bytes)")
           with ZipFile(archive) as z:
               print("ZIP contents:", z.namelist())
-              assert z.namelist() == ["HappX-0.1.8.apk"]
+              assert z.namelist() == ["HappX-0.1.9.apk"]
           PY
 
       - name: Upload ZIP directly (no extra ZIP wrapper)
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          path: HappX-0.1.8.zip
+          path: HappX-0.1.9.zip
           archive: false
           if-no-files-found: error
           retention-days: 7

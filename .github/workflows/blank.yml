@@ -808,9 +808,9 @@ jobs:
           xml = manifest.read_text()
           if "android.permission.FOREGROUND_SERVICE" not in xml:
               xml = xml.replace("<uses-permission android:name=\"android.permission.INTERNET\" />",
-                  "<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE\" />\n    <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE_SPECIAL_USE\" />")
+                  "<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE\" />\n    <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED\" />")
           xml = xml.replace('android:exported="false">\n            <intent-filter>',
-              'android:exported="false"\n            android:foregroundServiceType="specialUse">\n            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="VPN tunnel for Xray proxy" />\n            <intent-filter>')
+              'android:exported="false"\n            android:foregroundServiceType="systemExempted">\n            <intent-filter>')
           manifest.write_text(xml)
 
           gradle = Path("stage/app/build.gradle.kts")
@@ -990,6 +990,31 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write(f"\n- APK SHA-256: `{digest}`\n")
           PY
+
+      - name: Verify APK install metadata and alignment
+        run: |
+          set -euo pipefail
+          APK="stage/app/build/outputs/apk/release/HappX-arm64-release.apk"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          AAPT="$(find "$SDK/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          ZIPALIGN="$(find "$SDK/build-tools" -type f -name zipalign | sort -V | tail -n 1)"
+          test -n "$AAPT"
+          test -n "$ZIPALIGN"
+          "$ZIPALIGN" -c -v 4 "$APK"
+          "$AAPT" dump badging "$APK" | tee "$RUNNER_TEMP/happx-apk-badging.txt"
+          grep -q "package: name='app.happx'" "$RUNNER_TEMP/happx-apk-badging.txt"
+          grep -q "sdkVersion:'26'" "$RUNNER_TEMP/happx-apk-badging.txt"
+          grep -q "native-code: 'arm64-v8a'" "$RUNNER_TEMP/happx-apk-badging.txt"
+          sha256sum "$APK"
+          {
+            echo "### Android install metadata"
+            echo "- APK alignment check: passed"
+            echo "- Package ID: app.happx"
+            echo "- Minimum Android SDK: 26 (Android 8.0+)"
+            echo "- ABI: arm64-v8a"
+            echo "- APK SHA-256:"
+            sha256sum "$APK"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package APK at ZIP root
         run: |

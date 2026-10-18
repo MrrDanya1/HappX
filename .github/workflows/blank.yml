@@ -978,7 +978,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          path: HappX-0.1.9.zip
+          path: HappX-0.1.${{ github.run_number }}.zip
           archive: false
           if-no-files-found: error
           retention-days: 7

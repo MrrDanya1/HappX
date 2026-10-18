@@ -296,25 +296,37 @@ jobs:
           }
 
           private fun extractShareLinks(rawBody: String): List<String> {
-          fun supportedLines(value: String): List<String> = value
-              .removePrefix("\uFEFF")
-              .lineSequence()
-              .map { it.trim().trim('"', '\'') }
-              .filter { line ->
-                  line.startsWith("vless://", true) ||
-                      line.startsWith("vmess://", true) ||
-                      line.startsWith("trojan://", true)
-              }
+          val linkRegex = Regex("(?i)(?:vless|vmess|trojan)://[^\\s\\\"'<>]+")
+          fun supportedLinks(value: String): List<String> = linkRegex.findAll(value)
+              .map { it.value.trim().trimEnd(',', ';', ')', ']', '}') }
+              .filter { it.contains('@') || it.startsWith("vmess://", true) }
               .distinct()
               .toList()
 
-          val direct = supportedLines(rawBody)
-          if (direct.isNotEmpty()) return direct
-          val compact = rawBody.trim().filterNot { it.isWhitespace() }
-          val decoded = runCatching {
-              String(Base64.decode(compact, Base64.DEFAULT or Base64.URL_SAFE), Charsets.UTF_8)
-          }.getOrNull() ?: return emptyList()
-          return supportedLines(decoded)
+          val queue = ArrayDeque<String>()
+          val seen = mutableSetOf<String>()
+          queue.add(rawBody.removePrefix("\\uFEFF").trim())
+          repeat(3) {
+              val currentBatch = queue.toList()
+              queue.clear()
+              for (value in currentBatch) {
+                  if (value.isBlank() || !seen.add(value)) continue
+                  val links = supportedLinks(value)
+                  if (links.isNotEmpty()) return links
+                  val compact = value.filterNot { it.isWhitespace() }
+                  if (compact.length >= 16) {
+                      for (flags in listOf(Base64.DEFAULT, Base64.URL_SAFE, Base64.NO_WRAP, Base64.URL_SAFE or Base64.NO_WRAP)) {
+                          val decoded = runCatching {
+                              String(Base64.decode(compact, flags), Charsets.UTF_8)
+                          }.getOrNull()
+                          if (!decoded.isNullOrBlank() && decoded != value && decoded.any { it.isLetterOrDigit() }) {
+                              queue.add(decoded)
+                          }
+                      }
+                  }
+              }
+          }
+          return emptyList()
           }
 
           private fun checkPings() {

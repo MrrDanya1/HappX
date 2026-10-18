@@ -645,6 +645,8 @@ jobs:
           main = app / "MainActivity.kt"
           code = main.read_text()
           code = code.replace("SingBoxConfigBuilder.parseShareLink", "XrayConfigBuilder.parseShareLink")
+          # ParsedXrayProfile exposes name/configJson, not the old sing-box profile type.
+          code = code.replace(".type", ".name")
 
           start = code.index("    private fun requestConnection() {")
           end = code.index("    @Deprecated(\"Legacy callback kept for broad Android compatibility\")", start)

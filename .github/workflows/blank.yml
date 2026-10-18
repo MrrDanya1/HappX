@@ -846,25 +846,44 @@ jobs:
               print(f"Target: 100 MiB — {'PASS' if size <= limit else 'OVER TARGET'}")
           PY
 
-      - name: Sign release APK for direct installation
+      - name: Sign release APK with persistent key (or test key)
+        env:
+          HAPPX_KEYSTORE_BASE64: ${{ secrets.HAPPX_KEYSTORE_BASE64 }}
+          HAPPX_KEYSTORE_PASSWORD: ${{ secrets.HAPPX_KEYSTORE_PASSWORD }}
+          HAPPX_KEY_ALIAS: ${{ secrets.HAPPX_KEY_ALIAS }}
+          HAPPX_KEY_PASSWORD: ${{ secrets.HAPPX_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           APK="stage/app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk"
-          test -f "$APK"
+          test -s "$APK"
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
           APKSIGNER="$(find "$SDK/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -n "$APKSIGNER"
-          if [ -z "$APKSIGNER" ]; then
-            echo "apksigner not found under Android SDK: $SDK"
-            find "$SDK" -maxdepth 4 -type f -name apksigner -print || true
-            exit 1
+
+          if [ -n "${HAPPX_KEYSTORE_BASE64:-}" ] && [ -n "${HAPPX_KEYSTORE_PASSWORD:-}" ] && [ -n "${HAPPX_KEY_ALIAS:-}" ] && [ -n "${HAPPX_KEY_PASSWORD:-}" ]; then
+            KEY="$RUNNER_TEMP/happx-release.jks"
+            printf '%s' "$HAPPX_KEYSTORE_BASE64" | base64 --decode > "$KEY"
+            test -s "$KEY"
+            "$APKSIGNER" sign \
+              --ks "$KEY" \
+              --ks-pass env:HAPPX_KEYSTORE_PASSWORD \
+              --ks-key-alias "$HAPPX_KEY_ALIAS" \
+              --key-pass env:HAPPX_KEY_PASSWORD \
+              "$APK"
+            echo "Signing mode: persistent release key" >> "$GITHUB_STEP_SUMMARY"
+            echo "HAPPX_SIGNING_MODE=release" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Release signing secrets are not configured. This APK will use a temporary Android debug key and is for testing only."
+            KEY="$HOME/.android/debug.keystore"
+            mkdir -p "$(dirname "$KEY")"
+            if [ ! -f "$KEY" ]; then
+              keytool -genkeypair -v -keystore "$KEY" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            fi
+            "$APKSIGNER" sign --ks "$KEY" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey "$APK"
+            echo "Signing mode: temporary debug key (testing only; not a production release)" >> "$GITHUB_STEP_SUMMARY"
+            echo "HAPPX_SIGNING_MODE=test" >> "$GITHUB_ENV"
           fi
-          KEY="$HOME/.android/debug.keystore"
-          mkdir -p "$(dirname "$KEY")"
-          if [ ! -f "$KEY" ]; then
-            keytool -genkeypair -v -keystore "$KEY" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          "$APKSIGNER" sign --ks "$KEY" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey "$APK"
+
           "$APKSIGNER" verify --verbose "$APK"
           mv "$APK" stage/app/build/outputs/apk/release/HappX-arm64-release.apk
 

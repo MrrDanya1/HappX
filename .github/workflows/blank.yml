@@ -841,15 +841,6 @@ jobs:
               print(f"Target: 100 MiB — {'PASS' if size <= limit else 'OVER TARGET'}")
           PY
 
-      - name: Upload installable arm64 debug APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: HappX-debug-arm64-APK
-          path: stage/**/build/outputs/apk/debug/*arm64-v8a*.apk
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Sign release APK for direct installation
         run: |
           set -euo pipefail
@@ -872,11 +863,29 @@ jobs:
           "$APKSIGNER" verify --verbose "$APK"
           mv "$APK" stage/app/build/outputs/apk/release/HappX-arm64-release.apk
 
-      - name: Upload arm64 release APK (signed for testing)
+      - name: Package APK at ZIP root
+        run: |
+          set -euo pipefail
+          APK="stage/app/build/outputs/apk/release/HappX-arm64-release.apk"
+          test -s "$APK"
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          apk = Path("stage/app/build/outputs/apk/release/HappX-arm64-release.apk")
+          archive = Path("HappX-0.1.8.zip")
+          with ZipFile(archive, "w", ZIP_DEFLATED) as z:
+              z.write(apk, arcname="HappX-0.1.8.apk")
+          print(f"Created {archive} ({archive.stat().st_size:,} bytes)")
+          with ZipFile(archive) as z:
+              print("ZIP contents:", z.namelist())
+              assert z.namelist() == ["HappX-0.1.8.apk"]
+          PY
+
+      - name: Upload ZIP with APK at root
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: HappX-release-arm64-signed
-          path: stage/app/build/outputs/apk/release/HappX-arm64-release.apk
+          name: HappX-APK-ZIP
+          path: HappX-0.1.8.zip
           if-no-files-found: error
           retention-days: 7

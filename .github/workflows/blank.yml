@@ -30,6 +30,43 @@ jobs:
           mkdir -p stage
           unzip -o HappX-Android-engine-stage.zip -d stage
 
+      - name: Set up Go for Xray core
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - name: Set up Android SDK for Xray core
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Android NDK for Xray core
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+          add-to-path: true
+
+      - name: Set up Java 21 for libXray build
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build official XTLS libXray Android library
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/XTLS/libXray.git /tmp/libXray
+          cd /tmp/libXray
+          python3 build/main.py android
+          test -s libXray.aar
+          mkdir -p "$GITHUB_WORKSPACE/stage/app/libs"
+          cp libXray.aar "$GITHUB_WORKSPACE/stage/app/libs/libXray.aar"
+          ls -lh "$GITHUB_WORKSPACE/stage/app/libs/libXray.aar"
+
+      - name: Restore Java 17 for HappX app build
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Inspect Android VPN source
         run: |
           echo "===== MainActivity.kt ====="
@@ -368,6 +405,357 @@ jobs:
           else:
               raise SystemExit("AndroidManifest.xml not found; cannot enable subscription networking")
           print("Patched subscription downloading, VLESS/VMess/Trojan extraction, TCP latency checks, ping sorting, and INTERNET permission.")
+          PY
+
+      - name: Integrate Xray core with Android VPN service
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          app = Path("stage/app/src/main/java/app/happx")
+          app.mkdir(parents=True, exist_ok=True)
+
+          # libbox and libXray each embed a Go runtime; do not load sing-box in
+          # the same process as Xray.
+          (app / "HappXApplication.kt").write_text("""package app.happx
+
+          import android.app.Application
+
+          class HappXApplication : Application()
+          """.replace("          ", ""))
+
+          (app / "XrayConfigBuilder.kt").write_text(r'''package app.happx
+
+          import libXray.LibXray
+          import org.json.JSONObject
+          import java.net.URLDecoder
+          import java.nio.charset.StandardCharsets
+
+          data class ParsedXrayProfile(val name: String, val configJson: String)
+
+          object XrayConfigBuilder {
+              fun parseShareLink(link: String): ParsedXrayProfile {
+                  val request = JSONObject()
+                      .put("apiVersion", 3)
+                      .put("method", "convertShareLinksToXrayJson")
+                      .put("payload", JSONObject().put("text", link))
+                      .toString()
+                  val response = JSONObject(LibXray.invoke(request))
+                  if (!response.optBoolean("success")) {
+                      throw IllegalArgumentException(response.optString("error").ifBlank { "Xray не распознал ссылку" })
+                  }
+                  val outbounds = response.optJSONObject("data")?.optJSONArray("outbounds")
+                      ?: throw IllegalArgumentException("Xray не вернул конфигурацию сервера")
+                  if (outbounds.length() == 0) throw IllegalArgumentException("В ссылке нет поддерживаемого сервера")
+                  val outbound = outbounds.getJSONObject(0)
+                  val tag = outbound.optString("tag").ifBlank { "proxy" }
+                  outbound.put("tag", tag)
+                  val rawName = link.substringAfter("#", "").takeIf { it.isNotBlank() } ?: tag
+                  val name = runCatching {
+                      URLDecoder.decode(rawName, StandardCharsets.UTF_8.name())
+                  }.getOrDefault(rawName).ifBlank { tag }
+                  return ParsedXrayProfile(name, outbound.toString())
+              }
+          }
+          '''.replace("          ", ""))
+
+          service = app / "HappXVpnService.kt"
+          service.write_text(r'''package app.happx
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
+          import android.content.Intent
+          import android.net.VpnService
+          import android.os.Build
+          import android.os.IBinder
+          import android.util.Log
+          import libXray.DialerController
+          import libXray.LibXray
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.util.concurrent.atomic.AtomicBoolean
+          import kotlin.concurrent.thread
+
+          class HappXVpnService : VpnService(), DialerController {
+              private var tun: android.os.ParcelFileDescriptor? = null
+              private val running = AtomicBoolean(false)
+              private val lock = Any()
+
+              override fun protectFd(fd: Int): Boolean = protect(fd)
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  if (intent?.action == ACTION_STOP) {
+                      stopTunnel()
+                      stopForeground(true)
+                      stopSelf()
+                      return START_NOT_STICKY
+                  }
+                  createNotificationChannel()
+                  startForeground(NOTIFICATION_ID, notification())
+                  val outbound = intent?.getStringExtra(EXTRA_OUTBOUND)
+                  if (outbound.isNullOrBlank()) {
+                      publishState("error", "Не выбрана конфигурация Xray")
+                      stopSelf()
+                      return START_NOT_STICKY
+                  }
+                  thread(name = "HappX-Xray-start") { startTunnel(outbound) }
+                  return START_NOT_STICKY
+              }
+
+              private fun startTunnel(outboundJson: String) {
+                  synchronized(lock) {
+                      stopTunnelLocked()
+                      try {
+                          val outbound = JSONObject(outboundJson)
+                          val outboundTag = outbound.optString("tag").ifBlank { "proxy" }
+                          outbound.put("tag", outboundTag)
+
+                          tun = Builder()
+                              .setSession("HappX Xray")
+                              .setMtu(1500)
+                              .addAddress("10.111.0.1", 32)
+                              .addRoute("0.0.0.0", 0)
+                              .addDnsServer("1.1.1.1")
+                              .establish()
+                              ?: throw IllegalStateException("Android не выдал TUN-интерфейс")
+
+                          LibXray.registerDialerController(this)
+                          LibXray.setDNS(this, "1.1.1.1:53")
+
+                          val inbounds = JSONArray().put(
+                              JSONObject()
+                                  .put("tag", "happx-tun")
+                                  .put("protocol", "tun")
+                                  .put("settings", JSONObject().put("name", "HappX").put("mtu", 1500))
+                          )
+                          val outbounds = JSONArray()
+                              .put(outbound)
+                              .put(JSONObject().put("tag", "direct").put("protocol", "freedom").put("settings", JSONObject()))
+                          val routingRules = JSONArray().put(
+                              JSONObject()
+                                  .put("type", "field")
+                                  .put("inboundTag", JSONArray().put("happx-tun"))
+                                  .put("outboundTag", outboundTag)
+                          )
+                          val config = JSONObject()
+                              .put("log", JSONObject().put("loglevel", "warning"))
+                              .put("inbounds", inbounds)
+                              .put("outbounds", outbounds)
+                              .put("routing", JSONObject().put("domainStrategy", "AsIs").put("rules", routingRules))
+                              .put("env", JSONObject().put("xray.tun.fd", tun!!.fd))
+                          val request = JSONObject()
+                              .put("apiVersion", 3)
+                              .put("method", "runXray")
+                              .put("payload", JSONObject().put("xrayJson", config.toString()))
+                              .toString()
+                          val response = JSONObject(LibXray.invoke(request))
+                          if (!response.optBoolean("success")) {
+                              throw IllegalStateException(response.optString("error").ifBlank { "Xray не смог запуститься" })
+                          }
+                          running.set(true)
+                          publishState("connected", "Xray запущен")
+                          Log.i(TAG, "Xray core started")
+                      } catch (e: Exception) {
+                          Log.e(TAG, "Xray start failed", e)
+                          stopTunnelLocked()
+                          publishState("error", e.message ?: "Ошибка запуска Xray")
+                          stopForeground(true)
+                          stopSelf()
+                      }
+                  }
+              }
+
+              private fun stopTunnel() {
+                  synchronized(lock) { stopTunnelLocked() }
+              }
+
+              private fun stopTunnelLocked() {
+                  if (running.getAndSet(false)) {
+                      runCatching {
+                          LibXray.invoke(JSONObject().put("apiVersion", 3).put("method", "stopXray").put("payload", JSONObject()).toString())
+                      }.onFailure { Log.w(TAG, "Xray stop warning", it) }
+                      runCatching { LibXray.resetDNS() }
+                  }
+                  runCatching { tun?.close() }
+                  tun = null
+                  publishState("disconnected", "Отключено")
+              }
+
+              private fun publishState(state: String, message: String) {
+                  getSharedPreferences("happx_vpn", MODE_PRIVATE).edit()
+                      .putString("state", state).putString("message", message).apply()
+                  sendBroadcast(Intent(ACTION_STATE).setPackage(packageName)
+                      .putExtra(EXTRA_STATE, state).putExtra(EXTRA_MESSAGE, message))
+              }
+
+              private fun createNotificationChannel() {
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      val manager = getSystemService(NotificationManager::class.java)
+                      manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "HappX VPN", NotificationManager.IMPORTANCE_LOW))
+                  }
+              }
+
+              private fun notification(): Notification {
+                  val pending = PendingIntent.getActivity(
+                      this, 0, Intent(this, MainActivity::class.java),
+                      PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
+                  )
+                  return if (Build.VERSION.SDK_INT >= 26) {
+                      Notification.Builder(this, CHANNEL_ID)
+                          .setSmallIcon(android.R.drawable.stat_sys_warning)
+                          .setContentTitle("HappX Xray")
+                          .setContentText("VPN-служба работает")
+                          .setContentIntent(pending).setOngoing(true).build()
+                  } else {
+                      @Suppress("DEPRECATION")
+                      Notification.Builder(this)
+                          .setSmallIcon(android.R.drawable.stat_sys_warning)
+                          .setContentTitle("HappX Xray")
+                          .setContentText("VPN-служба работает")
+                          .setContentIntent(pending).setOngoing(true).build()
+                  }
+              }
+
+              override fun onDestroy() {
+                  stopTunnel()
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
+
+              companion object {
+                  const val ACTION_START = "app.happx.action.START_XRAY"
+                  const val ACTION_STOP = "app.happx.action.STOP_XRAY"
+                  const val ACTION_STATE = "app.happx.action.XRAY_STATE"
+                  const val EXTRA_OUTBOUND = "xray_outbound"
+                  const val EXTRA_STATE = "xray_state"
+                  const val EXTRA_MESSAGE = "xray_message"
+                  private const val TAG = "HappX-Xray"
+                  private const val CHANNEL_ID = "happx_vpn"
+                  private const val NOTIFICATION_ID = 821
+              }
+          }
+          '''.replace("          ", ""))
+
+          main = app / "MainActivity.kt"
+          code = main.read_text()
+          code = code.replace("SingBoxConfigBuilder.parseShareLink", "XrayConfigBuilder.parseShareLink")
+
+          start = code.index("    private fun requestConnection() {")
+          end = code.index("    @Deprecated(\"Legacy callback kept for broad Android compatibility\")", start)
+          replacement = r'''    private fun requestConnection() {
+          if (connected) {
+              startService(Intent(this, HappXVpnService::class.java).setAction(HappXVpnService.ACTION_STOP))
+              connected = false
+              status.text = "Отключение…"
+              connectButton.text = "⏻   ПОДКЛЮЧИТЬ"
+              return
+          }
+          if (servers.isEmpty()) {
+              Toast.makeText(this, "Сначала добавь ссылку сервера или подписку.", Toast.LENGTH_LONG).show()
+              return
+          }
+          if (selectedIndex !in servers.indices) {
+              Toast.makeText(this, "Сначала выбери сервер из списка.", Toast.LENGTH_LONG).show()
+              return
+          }
+          val selected = servers[selectedIndex]
+          val outbound = serverConfigs[selected]
+          if (outbound.isNullOrBlank()) {
+              Toast.makeText(this, "Не удалось подготовить Xray-конфигурацию. Импортируй VLESS, VMess или Trojan.", Toast.LENGTH_LONG).show()
+              return
+          }
+          val prepare = VpnService.prepare(this)
+          if (prepare != null) {
+              startActivityForResult(prepare, 700)
+          } else {
+              launchXray(outbound)
+          }
+      }
+
+      private fun launchXray(outbound: String) {
+          val intent = Intent(this, HappXVpnService::class.java)
+              .setAction(HappXVpnService.ACTION_START)
+              .putExtra(HappXVpnService.EXTRA_OUTBOUND, outbound)
+          if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+          status.text = "Запуск Xray…"
+          connectButton.text = "Отключить"
+      }
+
+      private val xrayStateReceiver = object : android.content.BroadcastReceiver() {
+          override fun onReceive(context: android.content.Context?, intent: Intent?) {
+              val state = intent?.getStringExtra(HappXVpnService.EXTRA_STATE) ?: return
+              val message = intent.getStringExtra(HappXVpnService.EXTRA_MESSAGE) ?: state
+              connected = state == "connected"
+              if (::status.isInitialized) status.text = message
+              if (::connectButton.isInitialized) connectButton.text = if (connected) "Отключить" else "⏻   ПОДКЛЮЧИТЬ"
+          }
+      }
+
+      override fun onResume() {
+          super.onResume()
+          val filter = android.content.IntentFilter(HappXVpnService.ACTION_STATE)
+          if (android.os.Build.VERSION.SDK_INT >= 33) {
+              registerReceiver(xrayStateReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+          } else {
+              @Suppress("DEPRECATION")
+              registerReceiver(xrayStateReceiver, filter)
+          }
+          val saved = getSharedPreferences("happx_vpn", MODE_PRIVATE)
+          connected = saved.getString("state", "disconnected") == "connected"
+          if (::status.isInitialized) status.text = saved.getString("message", "Отключено")
+          if (::connectButton.isInitialized) connectButton.text = if (connected) "Отключить" else "⏻   ПОДКЛЮЧИТЬ"
+      }
+
+      override fun onPause() {
+          runCatching { unregisterReceiver(xrayStateReceiver) }
+          super.onPause()
+      }
+
+      '''
+          code = code[:start] + replacement + code[end:]
+          # Replace old permission callback with real Xray startup.
+          callback_start = code.index("    @Deprecated(\"Legacy callback kept for broad Android compatibility\")")
+          callback_end = code.index("    private fun showImportDialog() {", callback_start)
+          callback = r'''    @Deprecated("Legacy callback kept for broad Android compatibility")
+      override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+          super.onActivityResult(requestCode, resultCode, data)
+          if (requestCode == 700 && resultCode == RESULT_OK && selectedIndex in servers.indices) {
+              val selected = servers[selectedIndex]
+              val outbound = serverConfigs[selected]
+              if (!outbound.isNullOrBlank()) launchXray(outbound)
+          } else if (requestCode == 700) {
+              Toast.makeText(this, "Разрешение VPN не выдано.", Toast.LENGTH_LONG).show()
+          }
+      }
+
+      '''
+          code = code[:callback_start] + callback + code[callback_end:]
+          # Add missing state/receiver imports and remove accidental duplicate registrations.
+          if "import android.content.BroadcastReceiver" not in code:
+              code = code.replace("import android.content.Intent\n", "import android.content.Intent\nimport android.content.BroadcastReceiver\n")
+          main.write_text(code)
+
+          manifest = Path("stage/app/src/main/AndroidManifest.xml")
+          xml = manifest.read_text()
+          if "android.permission.FOREGROUND_SERVICE" not in xml:
+              xml = xml.replace("<uses-permission android:name=\"android.permission.INTERNET\" />",
+                  "<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE\" />\n    <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE_SPECIAL_USE\" />")
+          xml = xml.replace('android:exported="false">\n            <intent-filter>',
+              'android:exported="false"\n            android:foregroundServiceType="specialUse">\n            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="VPN tunnel for Xray proxy" />\n            <intent-filter>')
+          manifest.write_text(xml)
+
+          gradle = Path("stage/app/build.gradle.kts")
+          gs = gradle.read_text()
+          gs = gs.replace('    // sing-box native Android engine (GPL-3.0). Runtime bridge is documented separately.\n    implementation("com.github.singbox-android:libbox:1.14.3")',
+                          '    implementation(files("libs/libXray.aar"))')
+          if 'implementation(files("libs/libXray.aar"))' not in gs:
+              gs = re.sub(r'dependencies\s*\{', 'dependencies {\n    implementation(files("libs/libXray.aar"))', gs, count=1)
+          gradle.write_text(gs)
+          print("Integrated official XTLS/libXray AAR, Android TUN service, profile parsing, and real start/stop actions.")
           PY
 
       - name: Configure ARM64-only APK

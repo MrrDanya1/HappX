@@ -35,16 +35,19 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
+          import os
           p = Path("stage/app/build.gradle.kts")
           if not p.exists():
               raise SystemExit("Missing stage/app/build.gradle.kts")
+          run_number = int(os.environ["GITHUB_RUN_NUMBER"])
+          version_name = f"0.1.{run_number}"
           s = p.read_text()
-          s, code_count = re.subn(r'versionCode\s*=\s*\d+', 'versionCode = 10', s, count=1)
-          s, name_count = re.subn(r'versionName\s*=\s*"[^"]+"', 'versionName = "0.1.9"', s, count=1)
+          s, code_count = re.subn(r'versionCode\s*=\s*\d+', f'versionCode = {run_number}', s, count=1)
+          s, name_count = re.subn(r'versionName\s*=\s*"[^"]+"', f'versionName = "{version_name}"', s, count=1)
           if code_count != 1 or name_count != 1:
               raise SystemExit("Could not set versionCode/versionName")
           p.write_text(s)
-          print("HappX version set to 0.1.9 (versionCode 10)")
+          print(f"HappX version set to {version_name} (versionCode {run_number})")
           PY
 
       - name: Set up Go for Xray core
@@ -959,14 +962,16 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           from zipfile import ZipFile, ZIP_DEFLATED
+          import os
+          version = f"0.1.{os.environ['GITHUB_RUN_NUMBER']}"
           apk = Path("stage/app/build/outputs/apk/release/HappX-arm64-release.apk")
-          archive = Path("HappX-0.1.9.zip")
+          archive = Path(f"HappX-{version}.zip")
           with ZipFile(archive, "w", ZIP_DEFLATED) as z:
-              z.write(apk, arcname="HappX-0.1.9.apk")
+              z.write(apk, arcname=f"HappX-{version}.apk")
           print(f"Created {archive} ({archive.stat().st_size:,} bytes)")
           with ZipFile(archive) as z:
               print("ZIP contents:", z.namelist())
-              assert z.namelist() == ["HappX-0.1.9.apk"]
+              assert z.namelist() == [f"HappX-{version}.apk"]
           PY
 
       - name: Upload ZIP directly (no extra ZIP wrapper)

@@ -830,7 +830,7 @@ jobs:
           PY
 
       - name: Remove Internet permission for diagnostic build only
-        if: ${{ inputs.no_internet_test == true }}
+        if: ${{ github.event_name == 'push' || inputs.no_internet_test == true }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -888,7 +888,7 @@ jobs:
           gradle -p stage --no-daemon assembleDebug assembleRelease
 
       - name: Verify Internet permission is absent in diagnostic build
-        if: ${{ inputs.no_internet_test == true }}
+        if: ${{ github.event_name == 'push' || inputs.no_internet_test == true }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1073,7 +1073,7 @@ jobs:
           set -euo pipefail
           APK="stage/app/build/outputs/apk/release/HappX-arm64-release.apk"
           test -s "$APK"
-          if [ "${{ inputs.no_internet_test }}" = "true" ]; then SUFFIX="-NO-INTERNET-TEST"; else SUFFIX=""; fi
+          if [ "${{ github.event_name == 'push' || inputs.no_internet_test == true }}" = "true" ]; then SUFFIX="-NO-INTERNET-TEST"; else SUFFIX=""; fi
           export HAPPX_SUFFIX="$SUFFIX"
           echo "HAPPX_SUFFIX=$SUFFIX" >> "$GITHUB_ENV"
           cp "$APK" "HappX-0.1.${GITHUB_RUN_NUMBER}${SUFFIX}.apk"
@@ -1106,7 +1106,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: HappX-0.1.${{ github.run_number }}${{ inputs.no_internet_test && '-NO-INTERNET-TEST' || '-APK' }}
+          name: HappX-0.1.${{ github.run_number }}${{ (github.event_name == 'push' || inputs.no_internet_test == true) && '-NO-INTERNET-TEST' || '-APK' }}
           path: HappX-0.1.${{ github.run_number }}*.apk
           archive: false
           if-no-files-found: error

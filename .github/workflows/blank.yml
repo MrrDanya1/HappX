@@ -484,7 +484,7 @@ jobs:
               private val running = AtomicBoolean(false)
               private val lock = Any()
 
-              override fun protectFd(fd: Int): Boolean = protect(fd)
+              override fun protectFd(fd: Long): Boolean = protect(fd.toInt())
 
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                   if (intent?.action == ACTION_STOP) {
@@ -545,7 +545,7 @@ jobs:
                               .put("inbounds", inbounds)
                               .put("outbounds", outbounds)
                               .put("routing", JSONObject().put("domainStrategy", "AsIs").put("rules", routingRules))
-                              .put("env", JSONObject().put("xray.tun.fd", tun!!.fd))
+                              .put("env", JSONObject().put("xray.tun.fd", tun!!.fd.toString()))
                           val request = JSONObject()
                               .put("apiVersion", 3)
                               .put("method", "runXray")
@@ -577,8 +577,8 @@ jobs:
                       runCatching {
                           LibXray.invoke(JSONObject().put("apiVersion", 3).put("method", "stopXray").put("payload", JSONObject()).toString())
                       }.onFailure { Log.w(TAG, "Xray stop warning", it) }
-                      runCatching { LibXray.resetDNS() }
                   }
+                  runCatching { LibXray.resetDNS() }
                   runCatching { tun?.close() }
                   tun = null
                   publishState("disconnected", "Отключено")
@@ -601,7 +601,7 @@ jobs:
               private fun notification(): Notification {
                   val pending = PendingIntent.getActivity(
                       this, 0, Intent(this, MainActivity::class.java),
-                      PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
+                      PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)
                   )
                   return if (Build.VERSION.SDK_INT >= 26) {
                       Notification.Builder(this, CHANNEL_ID)

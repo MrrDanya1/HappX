@@ -88,6 +88,30 @@ jobs:
           cp libXray.aar "$GITHUB_WORKSPACE/stage/app/libs/libXray.aar"
           ls -lh "$GITHUB_WORKSPACE/stage/app/libs/libXray.aar"
 
+      - name: Audit native library provenance before packaging
+        run: |
+          set -euo pipefail
+          AAR="stage/app/libs/libXray.aar"
+          mkdir -p "$RUNNER_TEMP/libxray-audit"
+          unzip -o "$AAR" 'jni/*' -d "$RUNNER_TEMP/libxray-audit" >/dev/null
+          echo "===== Native libraries inside the freshly built official libXray AAR ====="
+          find "$RUNNER_TEMP/libxray-audit" -type f -name '*.so' -print0 | sort -z | xargs -0 -r sha256sum
+          echo "===== ELF file metadata ====="
+          find "$RUNNER_TEMP/libxray-audit" -type f -name '*.so' -print0 | while IFS= read -r -d '' lib; do
+            file "$lib" || true
+            if [[ "$lib" == *libgojni.so ]]; then
+              echo "===== Go build metadata for libgojni.so (if readable) ====="
+              go version -m "$lib" || true
+            fi
+          done
+          {
+            echo "### Native library provenance"
+            echo "- Built from pinned XTLS/libXray commit: `75ccb623c807a1113a064278e3e544b0049c16a5`"
+            echo "- Go toolchain selected by setup-go: `$(go version)`"
+            echo "- SHA-256 hashes and ELF metadata for native libraries are printed in the build log."
+            echo "- This audit does not suppress detections or claim that a VirusTotal result is a false positive."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Restore Java 17 for HappX app build
         uses: actions/setup-java@v5
         with:
